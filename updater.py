@@ -1,24 +1,22 @@
-"""Cập nhật tự động qua GitHub Releases (chỉ dùng thư viện chuẩn).
+"""Cập nhật tự động từ thư mục mạng LAN (chỉ dùng thư viện chuẩn).
 
-Quy ước bản phát hành trên GitHub:
-  - tag dạng v1.3.0
-  - có file cài đặt *Setup*.exe và file kiểm tra toàn vẹn <tên file>.sha256
+Thư mục cập nhật chứa:
+  - version.json : {"version": "1.3.0", "file": "ClipForge-Setup-1.3.0.exe",
+                    "sha256": "<64 ký tự hex>", "notes": "..."}
+  - file cài đặt được ghi trong version.json
+
+Tạo thư mục này bằng: python tools\\make_release.py ...
+Chỉ cho tài khoản quản trị quyền GHI vào thư mục này (ai ghi được là đẩy được chương trình
+tới mọi máy), các máy khác chỉ cần quyền ĐỌC.
 """
 import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
-import urllib.request
-from urllib.parse import urlparse
-
-ALLOWED_HOSTS = {
-    'api.github.com',
-    'github.com',
-    'objects.githubusercontent.com',
-    'release-assets.githubusercontent.com',
-}
+from pathlib import Path
 
 
 def parse_version(text):
@@ -36,65 +34,57 @@ def is_newer(latest, current):
     return a > b
 
 
-def _check_url(url):
-    parts = urlparse(url)
-    if parts.scheme != 'https' or parts.hostname not in ALLOWED_HOSTS:
-        raise ValueError('Địa chỉ cập nhật không hợp lệ.')
+def _settings(app):
+    base = os.environ.get('APPDATA') or str(Path.home())
+    return Path(base) / app / 'update.json'
 
 
-def _open(url, timeout=20):
-    _check_url(url)
-    request = urllib.request.Request(url, headers={
-        'User-Agent': 'App-Updater',
-        'Accept': 'application/vnd.github+json, application/octet-stream',
-    })
-    response = urllib.request.urlopen(request, timeout=timeout)
+def get_folder(app):
     try:
-        _check_url(response.geturl())
-    except ValueError:
-        response.close()
-        raise
-    return response
+        return str(json.loads(_settings(app).read_text('utf-8')).get('folder', '')).strip()
+    except Exception:
+        return ''
 
 
-def check_latest(repo, current, asset_pattern=r'setup.*\.exe$'):
+def set_folder(app, folder):
+    path = _settings(app)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'folder': str(folder)}), 'utf-8')
+
+
+def check_latest(folder, current):
     """Trả về dict thông tin bản mới, hoặc None nếu đang là bản mới nhất."""
-    with _open(f'https://api.github.com/repos/{repo}/releases/latest') as response:
-        data = json.load(response)
-    tag = data.get('tag_name', '')
-    if not is_newer(tag, current):
+    base = Path(folder)
+    manifest = base / 'version.json'
+    if not manifest.is_file():
+        raise ValueError(f'Không tìm thấy version.json trong:\n{folder}')
+    data = json.loads(manifest.read_text('utf-8-sig'))
+    version = str(data.get('version', ''))
+    if not is_newer(version, current):
         return None
-    assets = {a['name']: a['browser_download_url'] for a in data.get('assets', [])}
-    name = next((n for n in assets if re.search(asset_pattern, n, re.I)), None)
-    if not name:
-        raise ValueError(f'Bản {tag} chưa có file cài đặt.')
-    if name + '.sha256' not in assets:
-        raise ValueError(f'Bản {tag} thiếu file kiểm tra .sha256, không cập nhật để đảm bảo an toàn.')
+    name = str(data.get('file', ''))
+    sha = str(data.get('sha256', '')).lower()
     if not re.fullmatch(r'[\w.\-]+\.exe', name):
         raise ValueError('Tên file cập nhật không hợp lệ.')
-    return {
-        'version': tag.lstrip('vV'),
-        'name': name,
-        'url': assets[name],
-        'sha_url': assets[name + '.sha256'],
-        'notes': data.get('body') or '',
-    }
+    if not re.fullmatch(r'[0-9a-f]{64}', sha):
+        raise ValueError('version.json thiếu mã SHA-256 hợp lệ.')
+    path = base / name
+    if not path.is_file():
+        raise ValueError(f'Chưa thấy file {name} trong thư mục cập nhật.')
+    return {'version': version.lstrip('vV'), 'name': name, 'path': str(path),
+            'sha256': sha, 'notes': str(data.get('notes', ''))}
 
 
 def download(info, progress=None):
-    """Tải file cài đặt, kiểm tra SHA-256, trả về đường dẫn file đã tải."""
-    with _open(info['sha_url']) as response:
-        expected = response.read(4096).decode('ascii', 'ignore').split()[0].lower()
-    if not re.fullmatch(r'[0-9a-f]{64}', expected):
-        raise ValueError('File .sha256 không hợp lệ.')
+    """Chép file cài đặt về máy, kiểm tra SHA-256, trả về đường dẫn file trên máy."""
     folder = tempfile.mkdtemp(prefix='app_update_')
-    path = os.path.join(folder, info['name'])
+    dest = os.path.join(folder, info['name'])
     digest = hashlib.sha256()
-    with _open(info['url'], timeout=60) as response, open(path, 'wb') as out:
-        total = int(response.headers.get('Content-Length') or 0)
-        done = 0
+    total = os.path.getsize(info['path'])
+    done = 0
+    with open(info['path'], 'rb') as src, open(dest, 'wb') as out:
         while True:
-            chunk = response.read(1 << 16)
+            chunk = src.read(1 << 20)
             if not chunk:
                 break
             out.write(chunk)
@@ -102,10 +92,10 @@ def download(info, progress=None):
             done += len(chunk)
             if progress and total:
                 progress(done * 100 / total)
-    if digest.hexdigest() != expected:
-        os.remove(path)
-        raise ValueError('File tải về bị lỗi (sai mã SHA-256), đã huỷ cập nhật.')
-    return path
+    if digest.hexdigest() != info['sha256']:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise ValueError('File cập nhật bị lỗi (sai mã SHA-256), đã huỷ cập nhật.')
+    return dest
 
 
 def install(path):
