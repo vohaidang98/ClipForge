@@ -134,6 +134,9 @@ class App(tk.Tk):
         self.after(100, self.pump)
         self.updating = False
         self.after(3000, lambda: self.check_update(False))
+        if not licensing.is_activated():
+            self.withdraw()
+            self.after(100, lambda: self.ask_activation(required=True))
 
     def refresh_license(self):
         if licensing.is_activated():
@@ -143,14 +146,21 @@ class App(tk.Tk):
             self.license_text.set('Bản cơ bản')
             self.license_button.state(['!disabled'])
 
-    def ask_activation(self):
+    def ask_activation(self, required=False):
         win = tk.Toplevel(self)
         win.title('Kích hoạt ' + APP)
         win.resizable(False, False)
-        win.transient(self)
+        if not required:
+            win.transient(self)
+
+        def cancel():
+            win.destroy()
+            if required:
+                self.destroy()
+        win.protocol('WM_DELETE_WINDOW', cancel)
         frame = ttk.Frame(win, padding=22)
         frame.pack()
-        ttk.Label(frame, text='Nhập mã kích hoạt để mở đầy đủ tính năng.').pack(anchor='w')
+        ttk.Label(frame, text='Nhập mã kích hoạt để sử dụng ' + APP + '.').pack(anchor='w')
         code = tk.StringVar()
         entry = ttk.Entry(frame, textvariable=code, show='*', width=34)
         entry.pack(pady=(12, 4))
@@ -161,13 +171,15 @@ class App(tk.Tk):
             if licensing.activate(code.get()):
                 win.destroy()
                 self.refresh_license()
+                if required:
+                    self.deiconify()
                 messagebox.showinfo(APP, 'Kích hoạt thành công.')
             else:
                 code.set('')
                 message.set('Mã không đúng. Hãy thử lại.')
         buttons = ttk.Frame(frame)
         buttons.pack(anchor='e', pady=(12, 0))
-        ttk.Button(buttons, text='Huỷ', command=win.destroy).pack(side='right')
+        ttk.Button(buttons, text='Thoát' if required else 'Huỷ', command=cancel).pack(side='right')
         ttk.Button(buttons, text='Kích hoạt', command=submit).pack(side='right', padx=8)
         entry.bind('<Return>', submit)
         entry.focus_set()
@@ -409,9 +421,6 @@ class App(tk.Tk):
     def start(self, key):
         if self.busy:
             return messagebox.showinfo(APP, 'Đang xử lý. Hãy dừng hoặc chờ hoàn tất.')
-        if key == 'convert' and not licensing.is_activated():
-            messagebox.showinfo(APP, 'Chức năng Chuyển đổi cần kích hoạt. Bấm nút "Kích hoạt" và nhập mã.')
-            return self.ask_activation()
         t = self.tabs[key]
         try:
             if not t['files']:
