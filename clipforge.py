@@ -176,6 +176,10 @@ class App(tk.Tk):
     def check_update(self, manual):
         if self.updating:
             return
+        if not licensing.is_activated():
+            if manual:
+                messagebox.showinfo(APP, 'Chỉ bản đã kích hoạt mới cập nhật được. Bấm "Kích hoạt" và nhập mã.')
+            return
         if self.busy:
             if manual:
                 messagebox.showinfo(APP, 'Đang xử lý video. Hãy đợi xong rồi cập nhật.')
