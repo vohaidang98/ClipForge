@@ -15,7 +15,8 @@ import licensing
 import updater
 
 APP = 'ClipForge'
-APP_VERSION = '1.3.0'
+APP_VERSION = '1.3.1'
+UPDATE_REPO = 'vohaidang98/ClipForge'
 EXTS = {'.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.flv', '.ts', '.mts', '.m2ts'}
 DEFAULTS = dict(video_codec='h264', resolution='1280x720', scale_mode='Default',
                 video_bitrate='2000', framerate='30', audio_codec='aac',
@@ -196,19 +197,11 @@ class App(tk.Tk):
             if manual:
                 messagebox.showinfo(APP, 'Đang xử lý video. Hãy đợi xong rồi cập nhật.')
             return
-        folder = updater.get_folder(APP)
-        if not folder:
-            if not manual:
-                return
-            folder = filedialog.askdirectory(title='Chọn thư mục cập nhật (trên mạng LAN)')
-            if not folder:
-                return
-            updater.set_folder(APP, folder)
         self.updating = True
 
         def work():
             try:
-                info = updater.check_latest(folder, APP_VERSION)
+                info = updater.check_latest(UPDATE_REPO, APP_VERSION)
                 self.events.put(('update', (info, manual)))
             except Exception as exc:
                 self.events.put(('update_error', (str(exc), manual)))
@@ -533,9 +526,6 @@ class App(tk.Tk):
                     if data[1]:
                         self.status.set('Cập nhật thất bại')
                         messagebox.showerror(APP, f'Không cập nhật được:\n{data[0]}')
-                        if messagebox.askyesno(APP, 'Chọn lại thư mục cập nhật?'):
-                            updater.set_folder(APP, '')
-                            self.after(100, lambda: self.check_update(True))
                 elif kind == 'install':
                     updater.install(data)
                     self.destroy()
